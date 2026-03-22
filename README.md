@@ -2,7 +2,7 @@
 
 Pi coding agent extension for file operation permissions.
 
-> Works best with [pi-amplike](https://github.com/davebcn87/pi-amplike) — complements its Bash permission system with Read/Edit/Write controls.
+> Works best with [pi-amplike](https://github.com/pasky/pi-amplike) — complements its Bash permission system with Read/Edit/Write controls.
 
 ## Install
 
