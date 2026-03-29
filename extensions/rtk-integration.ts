@@ -1,6 +1,9 @@
 /**
  * RTK Integration for pi
+ *
  * Automatically rewrites bash commands to use RTK for token-optimized output.
+ * Supports 60-90% token savings on supported commands.
+ *
  * @see ~/.pi/agent/RTK.md
  */
 
@@ -8,94 +11,120 @@ import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 import { isToolCallEventType } from '@mariozechner/pi-coding-agent';
 import { execSync } from 'child_process';
 
-// Cache for rtk availability
-let rtkAvailable: boolean | null = null;
-let rtkVersion: string | null = null;
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MIN_RTK_VERSION = { major: 0, minor: 23 };
+const CHECK_TIMEOUT_MS = 2000;
+const REWRITE_TIMEOUT_MS = 1000;
+
+const SKIP_PATTERNS = {
+  heredoc: '<<',
+  pipe: '|',
+  sudo: 'sudo',
+  install: /\b(npm|yarn|pnpm|pip|cargo|go)\s+install\b/,
+  rtkPrefix: 'rtk ',
+} as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────────
+
+let rtkState: { available: boolean; version?: string } | null = null;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core Functions
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Check if rtk is installed
+ * Check if RTK is installed and meets minimum version requirement.
+ * Results are cached after first check.
  */
 function checkRtk(): { available: boolean; version?: string } {
-  if (rtkAvailable !== null) {
-    return { available: rtkAvailable, version: rtkVersion || undefined };
-  }
+  if (rtkState !== null) return rtkState;
+
   try {
-    const output = execSync('rtk --version 2>/dev/null', { encoding: 'utf-8', timeout: 2000 }).trim();
-    const match = output.match(/rtk\s+([\d.]+)/);
-    const version = match ? match[1] : 'unknown';
+    const output = execSync('rtk --version 2>/dev/null', {
+      encoding: 'utf-8',
+      timeout: CHECK_TIMEOUT_MS,
+    }).trim();
+
+    const version = output.match(/rtk\s+([\d.]+)/)?.[1] ?? 'unknown';
     const [major, minor] = version.split('.').map(Number);
-    if (major === 0 && minor < 23) {
-      rtkAvailable = false;
-      return { available: false };
-    }
-    rtkAvailable = true;
-    rtkVersion = version;
-    return { available: true, version };
+
+    const isVersionSufficient = major > MIN_RTK_VERSION.major ||
+      (major === MIN_RTK_VERSION.major && minor >= MIN_RTK_VERSION.minor);
+
+    return rtkState = {
+      available: isVersionSufficient,
+      version: isVersionSufficient ? version : undefined,
+    };
   } catch {
-    rtkAvailable = false;
-    return { available: false };
+    return rtkState = { available: false };
   }
 }
 
 /**
- * Commands to skip
+ * Determine if a command should be skipped (not rewritten).
+ * Skips: empty commands, heredocs, pipes, sudo, package installs, already-rtk commands.
  */
 function shouldSkip(cmd: string): boolean {
   const c = cmd.trim();
   if (!c) return true;
-  // Skip heredocs, pipes, sudo, installs
-  if (
-    c.includes('<<') ||
-    c.includes('|') ||
-    c.includes('sudo') ||
-    /\b(npm|yarn|pnpm|pip|cargo|go)\s+install\b/.test(c)
-  ) {
-    return true;
-  }
-  // Skip already-rtk commands
-  if (c.startsWith('rtk ')) return true;
-  return false;
+
+  const { heredoc, pipe, sudo, install, rtkPrefix } = SKIP_PATTERNS;
+  return c.includes(heredoc) ||
+    c.includes(pipe) ||
+    c.includes(sudo) ||
+    install.test(c) ||
+    c.startsWith(rtkPrefix);
 }
 
 /**
- * Rewrite command using rtk
+ * Attempt to rewrite a command using RTK.
+ * @returns The rewritten command, or null if no optimization possible.
  */
 function rewrite(cmd: string): string | null {
   try {
-    const result = execSync(`rtk rewrite "${cmd.replace(/"/g, '\\"')}"`, {
+    const escaped = cmd.replace(/"/g, '\\"');
+    const result = execSync(`rtk rewrite "${escaped}"`, {
       encoding: 'utf-8',
-      timeout: 1000,
+      timeout: REWRITE_TIMEOUT_MS,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
+
     return result !== cmd ? result : null;
   } catch {
     return null;
   }
 }
 
-/**
- * Extension entry point
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Extension Entry Point
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function (pi: ExtensionAPI) {
   let initialized = false;
+
+  const updateStatus = (ctx: ExtensionAPI['ui']) => {
+    const { available, version } = checkRtk();
+    ctx.ui.setStatus('rtk', available ? `RTK v${version} ✓` : 'RTK not installed');
+  };
 
   pi.on('session_start', async (_event, ctx) => {
     if (initialized) return;
     initialized = true;
-    const { available, version } = checkRtk();
-    if (available) {
-      ctx.ui.setStatus('rtk', `RTK v${version} ✓`);
-    } else {
-      ctx.ui.setStatus('rtk', 'RTK not installed');
-    }
+    updateStatus(ctx.ui);
   });
 
   pi.on('tool_call', async (event, _ctx) => {
     if (!isToolCallEventType('bash', event)) return;
-    const { available } = checkRtk();
-    if (!available) return;
+    if (!checkRtk().available) return;
+
     const cmd = event.input.command;
     if (shouldSkip(cmd)) return;
+
     const rewritten = rewrite(cmd);
     if (rewritten) {
       event.input.command = rewritten;
@@ -103,7 +132,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand('rtk-status', {
-    description: 'Show RTK status',
+    description: 'Show RTK installation status',
     handler: async (_args, ctx) => {
       const { available, version } = checkRtk();
       if (available) {
