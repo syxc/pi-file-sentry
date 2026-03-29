@@ -28,7 +28,7 @@ See [extensions/file-sentry.ts](extensions/file-sentry.ts) for full docs.
 
 ### rtk-integration
 
-Automatically rewrites bash commands to use [RTK](https://github.com/badlogic/rtk) for token-optimized output (60-90% savings).
+Automatically rewrites bash commands to use [RTK](https://github.com/rtk-ai/rtk) for token-optimized output (60-90% savings).
 
 **Features**:
 - ✅ Auto-detects RTK installation
