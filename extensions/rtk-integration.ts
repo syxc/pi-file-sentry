@@ -107,9 +107,9 @@ function rewrite(cmd: string): string | null {
 export default function (pi: ExtensionAPI) {
   let initialized = false;
 
-  const updateStatus = (ctx: ExtensionAPI['ui']) => {
+  const updateStatus = (ui: ExtensionAPI['ui']) => {
     const { available, version } = checkRtk();
-    ctx.ui.setStatus('rtk', available ? `RTK v${version} ✓` : 'RTK not installed');
+    ui.setStatus('rtk', available ? `RTK v${version} ✓` : 'RTK not installed');
   };
 
   pi.on('session_start', async (_event, ctx) => {
