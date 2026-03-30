@@ -17,6 +17,8 @@ Reads rules from `~/.config/amp/settings.json`. Blocks or asks before operations
 { "extensions": ["~/.pi/agent/extensions/file-sentry.ts"] }
 ```
 
+> **Tip**: Pairs well with [pi-amplike permissions](https://github.com/pasky/pi-amplike/blob/main/extensions/permissions.ts) for Bash command permissions.
+
 ---
 
 ### rtk-integration
