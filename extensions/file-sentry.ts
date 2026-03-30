@@ -10,6 +10,12 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 
+interface PermissionRule {
+  tool: string;
+  matches?: { cmd?: string | string[]; path?: string | string[] };
+  action: 'allow' | 'ask' | 'deny';
+}
+
 const STATE_PATH = join(homedir(), '.pi', 'agent', 'file-sentry.json');
 const CONFIG_PATH = join(homedir(), '.config', 'amp', 'settings.json');
 
@@ -86,7 +92,7 @@ function matches(value: string, pattern: string | string[]): boolean {
 function checkAction(tool: string, value: string): 'allow' | 'ask' | 'deny' {
   try {
     const data = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-    const rules = data['amp.permissions'] ?? [];
+    const rules: PermissionRule[] = data['amp.permissions'] ?? [];
 
     for (const rule of rules) {
       if (rule.tool !== '*' && rule.tool.toLowerCase() !== tool.toLowerCase()) {
@@ -136,7 +142,7 @@ export default function (pi: ExtensionAPI): void {
 
       try {
         const data = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
-        const rules = (data['amp.permissions'] ?? []).filter((r: any) =>
+        const rules = (data['amp.permissions'] ?? []).filter((r: PermissionRule) =>
           ['Read', 'Edit', 'Write', '*'].includes(r.tool)
         );
         ctx.ui.notify(`File Sentry: mode=${state.mode}, rules=${rules.length}`, 'info');
