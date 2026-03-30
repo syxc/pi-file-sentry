@@ -1,35 +1,21 @@
 /**
- * File Sentry Extension
+ * File Sentry for pi
  *
- * Multi-tool permission system for Read/Write/Edit operations.
- * Compatible with OpenCode-style permission configuration.
+ * Permission system for Read/Write/Edit/Bash operations.
+ * Reads rules from ~/.config/amp/settings.json
  */
+
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 
-type Action = 'allow' | 'ask' | 'deny';
-
-interface PermissionRule {
-  tool: 'Bash' | 'Read' | 'Edit' | 'Write' | '*';
-  matches?: { cmd?: string | string[]; path?: string | string[] };
-  action: Action;
-}
-
 const STATE_PATH = join(homedir(), '.pi', 'agent', 'file-sentry.json');
-const GLOBAL_CONFIG = join(homedir(), '.config', 'amp', 'settings.json');
+const CONFIG_PATH = join(homedir(), '.config', 'amp', 'settings.json');
 
 const recentDenials = new Set<string>();
 
-function loadRules(): PermissionRule[] {
-  try {
-    const data = JSON.parse(readFileSync(GLOBAL_CONFIG, 'utf8'));
-    return data['amp.permissions'] ?? [];
-  } catch {
-    return [];
-  }
-}
+let state: { mode: 'enabled' | 'yolo' } = { mode: 'enabled' };
 
 function loadState(): { mode: 'enabled' | 'yolo' } {
   try {
@@ -40,11 +26,11 @@ function loadState(): { mode: 'enabled' | 'yolo' } {
   return { mode: 'enabled' };
 }
 
-function saveState(state: { mode: 'enabled' | 'yolo' }): void {
+function saveState(s: { mode: 'enabled' | 'yolo' }): void {
   try {
     const dir = dirname(STATE_PATH);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+    writeFileSync(STATE_PATH, JSON.stringify(s, null, 2));
   } catch {}
 }
 
@@ -54,20 +40,15 @@ function globToRegex(pattern: string): RegExp {
     p = join(homedir(), p.slice(2));
   }
 
-  const GLOBSTAR_LEAD = '\x00GL\x00';
-  const GLOBSTAR_TAIL = '\x00GT\x00';
-  const STAR = '\x00ST\x00';
+  const GS_LEAD = '\x00GL\x00', GS_TAIL = '\x00GT\x00', STAR = '\x00ST\x00';
 
-  if (p.startsWith('**/')) {
-    p = p.replace(/^\*\*\//, GLOBSTAR_LEAD);
-  }
-  p = p.replace(/\/\*\*\//g, `/${GLOBSTAR_LEAD}`);
-  p = p.replace(/\/\*\*$/g, GLOBSTAR_TAIL);
+  if (p.startsWith('**/')) p = p.replace(/^\*\*\//, GS_LEAD);
+  p = p.replace(/\/\*\*\//g, `/${GS_LEAD}`);
+  p = p.replace(/\/\*\*$/g, GS_TAIL);
   p = p.replace(/\*/g, STAR);
-  p = escapeRegex(p);
-
-  p = p.replace(new RegExp(escapeRegex(GLOBSTAR_LEAD), 'g'), '(.*/)?');
-  p = p.replace(new RegExp(escapeRegex(GLOBSTAR_TAIL), 'g'), '(?:/.*)?');
+  p = p.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  p = p.replace(new RegExp(escapeRegex(GS_LEAD), 'g'), '(.*/)?');
+  p = p.replace(new RegExp(escapeRegex(GS_TAIL), 'g'), '(?:/.*)?');
   p = p.replace(new RegExp(escapeRegex(STAR), 'g'), '[^/]*');
   p = p.replace(/\\\?/g, '.');
 
@@ -80,6 +61,7 @@ function escapeRegex(str: string): string {
 
 function matches(value: string, pattern: string | string[]): boolean {
   const patterns = Array.isArray(pattern) ? pattern : [pattern];
+
   for (const p of patterns) {
     if (p === '*') return true;
 
@@ -101,19 +83,22 @@ function matches(value: string, pattern: string | string[]): boolean {
   return false;
 }
 
-function checkPermission(rules: PermissionRule[], tool: string, value: string): Action {
-  for (const rule of rules) {
-    if (rule.tool !== '*' && rule.tool.toLowerCase() !== tool.toLowerCase()) {
-      continue;
+function checkAction(tool: string, value: string): 'allow' | 'ask' | 'deny' {
+  try {
+    const data = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+    const rules = data['amp.permissions'] ?? [];
+
+    for (const rule of rules) {
+      if (rule.tool !== '*' && rule.tool.toLowerCase() !== tool.toLowerCase()) {
+        continue;
+      }
+
+      const matchValue = tool.toLowerCase() === 'bash' ? rule.matches?.cmd : rule.matches?.path;
+      if (matchValue === undefined) return rule.action;
+      if (matches(value, matchValue)) return rule.action;
     }
-    const matchValue = tool.toLowerCase() === 'bash' ? rule.matches?.cmd : rule.matches?.path;
-    if (matchValue === undefined) {
-      return rule.action;
-    }
-    if (matches(value, matchValue)) {
-      return rule.action;
-    }
-  }
+  } catch {}
+
   return 'allow';
 }
 
@@ -125,11 +110,11 @@ function shouldNotify(key: string): boolean {
 }
 
 export default function (pi: ExtensionAPI): void {
-  let state = loadState();
+  state = loadState();
   saveState(state);
 
   pi.registerCommand('file-sentry', {
-    description: 'Manage File Sentry permissions: yolo | enable | status',
+    description: 'File Sentry: yolo | enable | status',
     handler: async (args, ctx) => {
       const cmd = typeof args === 'string' ? args.toLowerCase() : (args[0] ?? '').toLowerCase();
 
@@ -149,37 +134,34 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
 
-      const rules = loadRules().filter((r) => ['Read', 'Edit', 'Write', '*'].includes(r.tool));
-      ctx.ui.notify(`File Sentry: mode=${state.mode}, rules=${rules.length}`, 'info');
+      try {
+        const data = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+        const rules = (data['amp.permissions'] ?? []).filter((r: any) =>
+          ['Read', 'Edit', 'Write', '*'].includes(r.tool)
+        );
+        ctx.ui.notify(`File Sentry: mode=${state.mode}, rules=${rules.length}`, 'info');
+      } catch {
+        ctx.ui.notify(`File Sentry: mode=${state.mode}, rules=0`, 'info');
+      }
     },
   });
 
   pi.on('tool_call', async (event, ctx) => {
     if (state.mode === 'yolo') return;
 
-    const toolName = event.toolName.toLowerCase();
-    if (!['bash', 'read', 'edit'].includes(toolName)) return;
+    const tool = event.toolName.toLowerCase();
+    if (!['bash', 'read', 'edit'].includes(tool)) return;
 
-    const rules = loadRules();
     let value = '';
-    let display = '';
-
-    switch (toolName) {
-      case 'bash':
-        value = (event.input.command as string) ?? '';
-        display = value;
-        break;
-      case 'read':
-      case 'edit':
-        value = (event.input.path as string) ?? '';
-        display = `${toolName.toUpperCase()} ${value}`;
-        break;
-    }
+    if (tool === 'bash') value = (event.input.command as string) ?? '';
+    else if (tool === 'read' || tool === 'edit') value = (event.input.path as string) ?? '';
 
     if (!value) return;
 
-    const action = checkPermission(rules, toolName, value);
+    const action = checkAction(tool, value);
     if (action === 'allow') return;
+
+    const display = tool === 'bash' ? value : `${tool.toUpperCase()} ${value}`;
 
     if (action === 'deny') {
       if (shouldNotify(value)) {
@@ -198,8 +180,6 @@ export default function (pi: ExtensionAPI): void {
       ctx.abort?.();
       return { block: true, reason: 'Blocked by user' };
     }
-
-    return;
   });
 
   pi.on('session_start', async (_e, ctx) => {
