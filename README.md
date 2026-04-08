@@ -21,6 +21,38 @@ Reads rules from `~/.config/amp/settings.json`. Blocks or asks before operations
 
 ---
 
+### claude-rules
+
+Implements Claude Code's `.claude/rules/` loading behavior for pi. Automatically discovers and loads rules from `~/.claude/rules/` and `.claude/rules/` directories.
+
+**Features**:
+- Auto-discovers all `.md` files recursively
+- Unconditional rules load at session start
+- Path-scoped rules (with `paths:` frontmatter) activate only when working with matching files
+- User-level rules (`~/.claude/rules/`) load before project rules (`.claude/rules/`)
+- Supports glob patterns: `**/*.ts`, `src/**/*`, `*.{ts,tsx}`
+
+**Example rule with path-scope**:
+```markdown
+---
+paths:
+  - "src/**/*.{ts,tsx}"
+---
+
+# TypeScript Rules
+- Use strict mode
+- No default exports, named exports only
+```
+
+**Install**:
+```json
+{ "extensions": ["~/.pi/agent/extensions/claude-rules.ts"] }
+```
+
+**Requires**: Create `~/.claude/rules/*.md` and/or `.claude/rules/*.md` with your rules.
+
+---
+
 ### rtk-integration
 
 Auto-rewrites bash commands to use [RTK](https://github.com/rtk-ai/rtk) for 60-90% token savings.
